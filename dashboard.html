@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Gold Signal — ผลการเทรด</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg: #0b0d10;
+    --surface: #14171c;
+    --surface-2: #1a1e24;
+    --border: #262b33;
+    --text: #eae7e0;
+    --muted: #8b93a1;
+    --gold: #d4af37;
+    --gold-bright: #f0c94a;
+    --win: #3ddc84;
+    --loss: #ef5350;
+    --mono: 'JetBrains Mono', monospace;
+    --display: 'Space Grotesk', sans-serif;
+    --body: 'Inter', sans-serif;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0;
+    background:
+      radial-gradient(1200px 500px at 15% -10%, rgba(212,175,55,0.08), transparent 60%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--body);
+    min-height:100vh;
+  }
+  a{ color:inherit; }
+
+  header{
+    padding:28px 32px 20px;
+    border-bottom:1px solid var(--border);
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:12px;
+  }
+  .brand{
+    display:flex;
+    align-items:center;
+    gap:14px;
+  }
+  .brand-mark{
+    width:38px; height:38px;
+    border-radius:9px;
+    background:linear-gradient(155deg, var(--gold-bright), #8a6d1a 70%);
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--display);
+    font-weight:700;
+    color:#141414;
+    font-size:18px;
+    flex-shrink:0;
+  }
+  .brand h1{
+    font-family:var(--display);
+    font-size:20px;
+    font-weight:600;
+    margin:0;
+    letter-spacing:0.2px;
+  }
+  .brand p{
+    margin:2px 0 0;
+    font-size:12.5px;
+    color:var(--muted);
+    font-family:var(--mono);
+  }
+  .live-badge{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-family:var(--mono);
+    font-size:12.5px;
+    color:var(--muted);
+    padding:7px 12px;
+    border:1px solid var(--border);
+    border-radius:100px;
+    background:var(--surface);
+  }
+  .pulse-dot{
+    width:8px; height:8px;
+    border-radius:50%;
+    background:var(--win);
+    box-shadow:0 0 0 0 rgba(61,220,132,0.6);
+    animation:pulse 2s infinite;
+  }
+  @keyframes pulse{
+    0%{ box-shadow:0 0 0 0 rgba(61,220,132,0.55); }
+    70%{ box-shadow:0 0 0 8px rgba(61,220,132,0); }
+    100%{ box-shadow:0 0 0 0 rgba(61,220,132,0); }
+  }
+
+  main{
+    max-width:1180px;
+    margin:0 auto;
+    padding:28px 32px 60px;
+  }
+
+  .stat-grid{
+    display:grid;
+    grid-template-columns:repeat(5, 1fr);
+    gap:14px;
+    margin-bottom:28px;
+  }
+  @media (max-width:900px){ .stat-grid{ grid-template-columns:repeat(2, 1fr); } }
+
+  .stat-card{
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:18px 18px 16px;
+    position:relative;
+    overflow:hidden;
+  }
+  .stat-card .eyebrow{
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:1.2px;
+    color:var(--muted);
+    margin:0 0 10px;
+    font-weight:600;
+  }
+  .stat-card .value{
+    font-family:var(--mono);
+    font-size:28px;
+    font-weight:700;
+    line-height:1;
+    color:var(--text);
+  }
+  .stat-card.accent .value{ color:var(--gold-bright); }
+  .stat-card.pos .value{ color:var(--win); }
+  .stat-card.neg .value{ color:var(--loss); }
+  .stat-card .sub{
+    margin-top:8px;
+    font-size:12px;
+    color:var(--muted);
+    font-family:var(--mono);
+  }
+
+  section.panel{
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:22px 22px 10px;
+    margin-bottom:24px;
+  }
+  section.panel h2{
+    font-family:var(--display);
+    font-size:15px;
+    font-weight:600;
+    margin:0 0 4px;
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  section.panel h2::before{
+    content:'';
+    width:3px; height:14px;
+    background:var(--gold);
+    border-radius:2px;
+    display:inline-block;
+  }
+  section.panel .panel-sub{
+    font-size:12.5px;
+    color:var(--muted);
+    margin:0 0 18px;
+  }
+
+  #equityChart{ max-height:280px; }
+
+  table{
+    width:100%;
+    border-collapse:collapse;
+    font-size:13px;
+  }
+  thead th{
+    text-align:left;
+    font-family:var(--mono);
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:0.8px;
+    color:var(--muted);
+    font-weight:600;
+    padding:10px 10px;
+    border-bottom:1px solid var(--border);
+    white-space:nowrap;
+  }
+  tbody td{
+    padding:11px 10px;
+    border-bottom:1px solid var(--border);
+    font-family:var(--mono);
+    color:var(--text);
+    white-space:nowrap;
+  }
+  tbody tr:hover{ background:var(--surface-2); }
+  .dir-long{ color:var(--win); font-weight:600; }
+  .dir-short{ color:var(--loss); font-weight:600; }
+  .status-pill{
+    display:inline-block;
+    padding:3px 9px;
+    border-radius:100px;
+    font-size:11px;
+    font-weight:600;
+    font-family:var(--mono);
+  }
+  .status-open{ background:rgba(212,175,55,0.15); color:var(--gold-bright); }
+  .status-win{ background:rgba(61,220,132,0.15); color:var(--win); }
+  .status-loss{ background:rgba(239,83,80,0.15); color:var(--loss); }
+
+  .empty-state{
+    padding:40px 10px;
+    text-align:center;
+    color:var(--muted);
+    font-size:13.5px;
+  }
+  .table-scroll{ overflow-x:auto; }
+
+  footer{
+    text-align:center;
+    color:var(--muted);
+    font-size:11.5px;
+    padding:20px;
+    font-family:var(--mono);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark">Au</div>
+    <div>
+      <h1>Gold Signal Tracker</h1>
+      <p>XAU/USD · Multi-Timeframe Price Action</p>
+    </div>
+  </div>
+  <div class="live-badge"><span class="pulse-dot"></span><span id="lastUpdate">กำลังโหลด...</span></div>
+</header>
+
+<main>
+
+  <div class="stat-grid">
+    <div class="stat-card accent">
+      <p class="eyebrow">Total R</p>
+      <div class="value" id="statTotalR">—</div>
+      <p class="sub">กำไร/ขาดทุนสะสม (หน่วย R)</p>
+    </div>
+    <div class="stat-card">
+      <p class="eyebrow">Win Rate</p>
+      <div class="value" id="statWinRate">—</div>
+      <p class="sub" id="statWinLoss">—</p>
+    </div>
+    <div class="stat-card">
+      <p class="eyebrow">สัญญาณทั้งหมด</p>
+      <div class="value" id="statTotal">—</div>
+      <p class="sub" id="statOpen">—</p>
+    </div>
+    <div class="stat-card">
+      <p class="eyebrow">RR เฉลี่ย</p>
+      <div class="value" id="statAvgRR">—</div>
+      <p class="sub">ต่อสัญญาณ</p>
+    </div>
+    <div class="stat-card">
+      <p class="eyebrow">ปิดแล้ว</p>
+      <div class="value" id="statClosed">—</div>
+      <p class="sub">Win / Loss</p>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>เส้นทางผลกำไร (Equity Curve)</h2>
+    <p class="panel-sub">สะสมหน่วย R ตามลำดับเวลาที่เทรดปิด (ชนะ = ได้ RR เต็ม, แพ้ = -1R)</p>
+    <canvas id="equityChart"></canvas>
+  </section>
+
+  <section class="panel">
+    <h2>ประวัติสัญญาณล่าสุด</h2>
+    <p class="panel-sub">แสดงล่าสุด 100 รายการ</p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>เวลาเปิด</th>
+            <th>ทิศทาง</th>
+            <th>Entry</th>
+            <th>SL</th>
+            <th>TP</th>
+            <th>RR</th>
+            <th>สถานะ</th>
+            <th>ผลลัพธ์ (R)</th>
+          </tr>
+        </thead>
+        <tbody id="tradesBody">
+          <tr><td colspan="8" class="empty-state">กำลังโหลดข้อมูล...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<footer>อัปเดตอัตโนมัติทุก 30 วินาที · นี่คือเครื่องมือติดตามผลจากการวิเคราะห์ทางเทคนิคอัตโนมัติ ไม่ใช่คำแนะนำการลงทุน</footer>
+
+<script>
+  let chart;
+
+  function fmtTime(iso){
+    if(!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleString('th-TH', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  }
+
+  function statusPill(status){
+    if(status === 'open') return '<span class="status-pill status-open">เปิดอยู่</span>';
+    if(status === 'win') return '<span class="status-pill status-win">ชนะ</span>';
+    return '<span class="status-pill status-loss">แพ้</span>';
+  }
+
+  async function loadStats(){
+    try{
+      const res = await fetch('/api/stats');
+      const data = await res.json();
+
+      document.getElementById('statTotalR').textContent = (data.totalR >= 0 ? '+' : '') + data.totalR + 'R';
+      document.getElementById('statTotalR').parentElement.classList.toggle('pos', data.totalR > 0);
+      document.getElementById('statTotalR').parentElement.classList.toggle('neg', data.totalR < 0);
+
+      document.getElementById('statWinRate').textContent = data.closedTrades ? data.winRate + '%' : '—';
+      document.getElementById('statWinLoss').textContent = data.wins + ' ชนะ / ' + data.losses + ' แพ้';
+
+      document.getElementById('statTotal').textContent = data.totalSignals;
+      document.getElementById('statOpen').textContent = data.openTrades + ' กำลังเปิดอยู่';
+
+      document.getElementById('statAvgRR').textContent = '1:' + data.avgRR;
+      document.getElementById('statClosed').textContent = data.closedTrades;
+
+      document.getElementById('lastUpdate').textContent = 'อัปเดตล่าสุด ' + new Date().toLocaleTimeString('th-TH');
+
+      // ตาราง
+      const tbody = document.getElementById('tradesBody');
+      if(data.trades.length === 0){
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">ยังไม่มีสัญญาณเทรดเข้ามา — ระบบจะบันทึกอัตโนมัติเมื่อมีสัญญาณใหม่</td></tr>';
+      } else {
+        tbody.innerHTML = data.trades.map(t => `
+          <tr>
+            <td>${fmtTime(t.openedAt)}</td>
+            <td class="${t.direction === 'long' ? 'dir-long' : 'dir-short'}">${t.direction === 'long' ? '🟢 LONG' : '🔴 SHORT'}</td>
+            <td>${t.entry}</td>
+            <td>${t.stopLoss}</td>
+            <td>${t.takeProfit}</td>
+            <td>1:${t.riskRewardRatio}</td>
+            <td>${statusPill(t.status)}</td>
+            <td>${t.resultR !== null ? (t.resultR >= 0 ? '+' : '') + t.resultR + 'R' : '—'}</td>
+          </tr>
+        `).join('');
+      }
+
+      // กราฟ equity curve
+      const labels = data.equityCurve.map(p => fmtTime(p.time));
+      const values = data.equityCurve.map(p => p.cumR);
+
+      if(chart){
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = values;
+        chart.update();
+      } else {
+        const ctx = document.getElementById('equityChart').getContext('2d');
+        chart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [{
+              label: 'Cumulative R',
+              data: values,
+              borderColor: '#d4af37',
+              backgroundColor: 'rgba(212,175,55,0.1)',
+              borderWidth: 2,
+              pointRadius: 0,
+              tension: 0.25,
+              fill: true,
+            }]
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: '#8b93a1', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }, grid: { color: '#1e2229' } },
+              y: { ticks: { color: '#8b93a1' }, grid: { color: '#1e2229' } },
+            }
+          }
+        });
+      }
+    } catch(err){
+      console.error('โหลดสถิติไม่สำเร็จ:', err);
+      document.getElementById('lastUpdate').textContent = 'โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชอีกครั้ง';
+    }
+  }
+
+  loadStats();
+  setInterval(loadStats, 30000);
+</script>
+
+</body>
+</html>
