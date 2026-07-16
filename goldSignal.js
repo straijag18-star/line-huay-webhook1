@@ -167,7 +167,7 @@ async function analyzeGoldSignal() {
   const levels4h = getValidatedLevels(candleSets['4h']);
   const levels1h = getValidatedLevels(candleSets['1h']);
 
-  const nearZoneTolerance = 0.002; // 0.2% ถือว่าราคาอยู่ "ใกล้แนว"
+  const nearZoneTolerance = 0.01; // ⚠️ TEMP TEST: ขยายจาก 0.002 (0.2%) เป็น 0.01 (1%) ชั่วคราวเพื่อทดสอบการส่งสัญญาณเข้า LINE — อย่าลืมเปลี่ยนกลับเป็น 0.002 หลังทดสอบเสร็จ!
   const isNear = (price, level) => Math.abs(price - level.price) / level.price <= nearZoneTolerance;
 
   const nearSupport4h = levels4h.supports.find(l => isNear(currentPrice, l));
