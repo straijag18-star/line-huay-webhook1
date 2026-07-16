@@ -28,7 +28,10 @@ async function fetchCandles(period, limit = 100) {
 
   const url = `${API_NINJAS_URL}?period=${period}&start=${start}&end=${now}`;
   const res = await fetch(url, { headers: { 'X-Api-Key': API_NINJAS_KEY } });
-  if (!res.ok) throw new Error(`API Ninjas error (${period}): ${res.status}`);
+  if (!res.ok) {
+    const bodyText = await res.text().catch(() => '(อ่าน response ไม่ได้)');
+    throw new Error(`API Ninjas error (${period}): ${res.status} - ${bodyText}`);
+  }
   const data = await res.json();
 
   // เรียงจากเก่า -> ใหม่ เพื่อให้ index ท้ายสุดคือแท่งล่าสุด
