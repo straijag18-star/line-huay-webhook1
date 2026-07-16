@@ -24,12 +24,33 @@ const DB_FILE = path.join(__dirname, 'db.json');
 // เพราะไฟล์ JSON ไม่รองรับการเขียนพร้อมกันหลายคำขอ (concurrent write) และจะหายถ้าโฮสต์รีสตาร์ท
 // (ขึ้นกับผู้ให้บริการโฮสติ้งบางเจ้าที่ไม่มี persistent disk)
 function loadDb() {
-  if (!fs.existsSync(DB_FILE)) return { records: [] };
-  try { return JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); }
-  catch (e) { return { records: [] }; }
+  if (!fs.existsSync(DB_FILE)) return { records: [], subscribers: [] };
+  try {
+    const db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    if (!Array.isArray(db.subscribers)) db.subscribers = []; // เผื่อไฟล์เดิมยังไม่มี field นี้
+    if (!Array.isArray(db.records)) db.records = [];
+    return db;
+  } catch (e) { return { records: [], subscribers: [] }; }
 }
 function saveDb(db) {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+}
+
+// ---------- จัดการรายชื่อผู้ที่จะรับการแจ้งเตือน (คนที่ add เพื่อน/เคยทักมา) ----------
+function addSubscriber(db, userId) {
+  if (!userId) return;
+  if (!db.subscribers.includes(userId)) {
+    db.subscribers.push(userId);
+    console.log('เพิ่มผู้รับการแจ้งเตือนใหม่:', userId);
+  }
+}
+function removeSubscriber(db, userId) {
+  if (!userId) return;
+  const before = db.subscribers.length;
+  db.subscribers = db.subscribers.filter(id => id !== userId);
+  if (db.subscribers.length !== before) {
+    console.log('ลบผู้รับการแจ้งเตือน (unfollow/block):', userId);
+  }
 }
 
 // ---------- แยกข้อความ (ใช้ logic เดียวกับช่อง "วางข้อมูลด่วน" ในหน้าเว็บ) ----------
@@ -122,13 +143,33 @@ app.post('/webhook', async (req, res) => {
   const db = loadDb();
 
   for (const event of events) {
+    const userId = event.source ? event.source.userId : null;
+
+    // ---------- คนกด Add เพื่อน หรือ Unblock OA ----------
+    if (event.type === 'follow') {
+      addSubscriber(db, userId);
+      saveDb(db);
+      continue;
+    }
+
+    // ---------- คน Block/ลบเพื่อน OA ----------
+    if (event.type === 'unfollow') {
+      removeSubscriber(db, userId);
+      saveDb(db);
+      continue;
+    }
+
     if (event.type !== 'message' || event.message.type !== 'text') continue;
+
+    // ทุกครั้งที่มีคนทักมา ให้บันทึกไว้เป็นผู้รับการแจ้งเตือนด้วย (เผื่อพลาด follow event)
+    addSubscriber(db, userId);
 
     const text = event.message.text;
     const groups = parseMessageText(text);
 
     if (groups.length === 0) {
-      // ข้อความที่ส่งมาไม่ตรงรูปแบบที่ระบบเข้าใจ (เช่นแชทคุยเล่นทั่วไป) - ข้ามไปเฉย ๆ ไม่บันทึก
+      // ข้อความที่ส่งมาไม่ตรงรูปแบบที่ระบบเข้าใจ (เช่นแชทคุยเล่นทั่วไป) - ไม่บันทึกเป็น record แต่ subscriber ข้างบนบันทึกไปแล้ว
+      saveDb(db);
       continue;
     }
 
@@ -165,6 +206,11 @@ app.get('/records', (req, res) => {
   res.json(db.records);
 });
 
+app.get('/subscribers', (req, res) => {
+  const db = loadDb();
+  res.json({ count: (db.subscribers || []).length, subscribers: db.subscribers || [] });
+});
+
 app.get('/health', (req, res) => res.send('OK'));
 
 app.listen(PORT, () => {
@@ -176,25 +222,53 @@ app.listen(PORT, () => {
 
 const { analyzeGoldSignal, formatSignalMessage } = require('./goldSignal');
 
-// ---------- ส่งข้อความแบบ push (ไม่ใช่ reply เพราะเป็นการแจ้งเตือนเอง ไม่ได้ตอบใคร) ----------
+// ---------- ส่งข้อความแบบ push ไปหาทุกคนที่ add เพื่อน/เคยทักเข้ามา (ไม่ใช่ reply เพราะเป็นการแจ้งเตือนเอง ไม่ได้ตอบใคร) ----------
+// ใช้ LINE Multicast API ส่งพร้อมกันได้สูงสุด 500 คนต่อ 1 ครั้ง
 async function pushMessage(text) {
-  const targetId = process.env.LINE_PUSH_TARGET_ID; // userId หรือ groupId ที่จะส่งแจ้งเตือนไปหา
-  if (!targetId || !CHANNEL_ACCESS_TOKEN) return;
+  if (!CHANNEL_ACCESS_TOKEN) {
+    console.warn('ไม่พบ LINE_CHANNEL_ACCESS_TOKEN - ข้ามการส่งแจ้งเตือน');
+    return;
+  }
 
-  try {
-    await fetch('https://api.line.me/v2/bot/message/push', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${CHANNEL_ACCESS_TOKEN}`,
-      },
-      body: JSON.stringify({
-        to: targetId,
-        messages: [{ type: 'text', text }],
-      }),
-    });
-  } catch (err) {
-    console.error('ส่ง push message ไม่สำเร็จ:', err);
+  const db = loadDb();
+  let subscribers = db.subscribers || [];
+
+  // รองรับของเดิม: ถ้ามีตั้ง LINE_PUSH_TARGET_ID ไว้ ให้รวมเข้าไปด้วย (เผื่ออยากส่งไปกลุ่ม/คนที่ตั้งไว้ตายตัวด้วย)
+  const fixedTargetId = process.env.LINE_PUSH_TARGET_ID;
+  if (fixedTargetId && !subscribers.includes(fixedTargetId)) {
+    subscribers = [...subscribers, fixedTargetId];
+  }
+
+  if (subscribers.length === 0) {
+    console.warn('ยังไม่มีผู้รับการแจ้งเตือนเลย (ยังไม่มีใคร add เพื่อน/ทักเข้ามา) - ข้ามการส่ง');
+    return;
+  }
+
+  // LINE จำกัดสูงสุด 500 คนต่อ multicast call เดียว - แบ่งเป็นชุดๆ ถ้าเกิน
+  const BATCH_SIZE = 500;
+  for (let i = 0; i < subscribers.length; i += BATCH_SIZE) {
+    const batch = subscribers.slice(i, i + BATCH_SIZE);
+    try {
+      const res = await fetch('https://api.line.me/v2/bot/message/multicast', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${CHANNEL_ACCESS_TOKEN}`,
+        },
+        body: JSON.stringify({
+          to: batch,
+          messages: [{ type: 'text', text }],
+        }),
+      });
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => '');
+        console.error(`ส่ง multicast ไม่สำเร็จ (${res.status}):`, bodyText);
+      } else {
+        console.log(`ส่งแจ้งเตือนไปหาผู้ติดตาม ${batch.length} คนสำเร็จ`);
+      }
+    } catch (err) {
+      console.error('ส่ง push message ไม่สำเร็จ:', err);
+    }
   }
 }
 
