@@ -152,6 +152,59 @@ function detectReversalPattern(candles) {
 }
 
 // ---------------------------------------------------------------
+// 4.1) หา "แท่งหลัก" (impulse candle) ที่ใช้เป็นฐานคำนวณ 50% ของเนื้อแท่ง (body)
+//      สำหรับฝั่ง Long: หาแท่งเขียว (แท่งขาขึ้น) ที่ body ใหญ่ที่สุดใน lookback ล่าสุด
+//      สำหรับฝั่ง Short: หาแท่งแดง (แท่งขาลง) ที่ body ใหญ่ที่สุดใน lookback ล่าสุด
+// ---------------------------------------------------------------
+function getImpulseCandle(candles, biasDirection, lookback = 12) {
+  const recent = candles.slice(-lookback, -1); // ไม่รวมแท่งล่าสุด (เก็บไว้เป็นแท่งยืนยัน)
+  const isBullish = c => c.close > c.open;
+  const isBearish = c => c.close < c.open;
+  const candidates = recent.filter(c => biasDirection === 'long' ? isBullish(c) : isBearish(c));
+  if (candidates.length === 0) return null;
+
+  return candidates.reduce((biggest, c) => {
+    const body = Math.abs(c.close - c.open);
+    const biggestBody = Math.abs(biggest.close - biggest.open);
+    return body > biggestBody ? c : biggest;
+  }, candidates[0]);
+}
+
+// ---------------------------------------------------------------
+// 4.2) เงื่อนไขยืนยันแบบ "50% ของเนื้อแท่ง" (ตามแนวคิด: ปิดเหนือ/ใต้ 50% ของ body
+//      แท่งหลัก + ต้องปิดข้าม wick ของแท่งก่อนหน้าด้วย ถึงจะถือว่ากลับตัวแข็งแรงจริง)
+//      ฝั่ง Long (B): แท่งล่าสุดต้องปิดเขียว, ปิดเหนือ 50% ของ body แท่งหลัก (เขียว),
+//                     และปิดเหนือ high ของแท่งก่อนหน้า (ปิดเหนือไส้)
+//      ฝั่ง Short (S): กลับกัน ใช้แท่งหลัก (แดง), ปิดใต้ 50% ของ body, ปิดใต้ low ของแท่งก่อนหน้า
+// ---------------------------------------------------------------
+function detectFiftyPercentConfirmation(candles, biasDirection) {
+  if (candles.length < 4) return null;
+  const impulse = getImpulseCandle(candles, biasDirection);
+  if (!impulse) return null;
+
+  const last = candles[candles.length - 1];
+  const prev = candles[candles.length - 2];
+  const midLevel = (impulse.open + impulse.close) / 2;
+
+  if (biasDirection === 'long') {
+    const closedGreen = last.close > last.open;
+    const aboveMid = last.close > midLevel;
+    const aboveWick = last.close > prev.high;
+    if (closedGreen && aboveMid && aboveWick) {
+      return { impulseCandle: impulse, level: +midLevel.toFixed(2), confirmCandle: last };
+    }
+  } else {
+    const closedRed = last.close < last.open;
+    const belowMid = last.close < midLevel;
+    const belowWick = last.close < prev.low;
+    if (closedRed && belowMid && belowWick) {
+      return { impulseCandle: impulse, level: +midLevel.toFixed(2), confirmCandle: last };
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------
 // 5) โครงหลัก: วิเคราะห์ทุก timeframe แล้วสรุปเป็นสัญญาณเดียว
 // ---------------------------------------------------------------
 async function analyzeGoldSignal() {
@@ -201,6 +254,22 @@ async function analyzeGoldSignal() {
     };
   }
 
+  // 5.3.1 เงื่อนไขเพิ่มเติม: ต้องมีแท่งที่ปิดผ่าน 50% ของเนื้อแท่งหลัก (impulse candle) + ปิดข้าม wick
+  //       ในอย่างน้อย 1 TF เล็ก ด้วย ถึงจะถือว่ากลับตัว "แข็งแรงจริง" ไม่ใช่แค่สัมผัสครั้งแรกแบบอ่อนๆ
+  const fiftyPctChecks = ['15m', '5m', '1m']
+    .map(tf => ({ tf, result: detectFiftyPercentConfirmation(candleSets[tf], biasDirection) }))
+    .filter(c => c.result);
+
+  if (fiftyPctChecks.length === 0) {
+    return {
+      hasSignal: false,
+      reason: `ราคาใกล้แนว ${keyLevel.price.toFixed(2)} (bias: ${biasDirection}) มีแท่งยืนยันรูปแบบแล้ว แต่ยังไม่ปิดผ่าน 50% ของเนื้อแท่งหลัก (ยังกลับตัวไม่แข็งแรงพอ)`,
+    };
+  }
+
+  // ใช้ผลจาก TF ที่ยืนยันได้ก่อน (เรียงจากใหญ่ไปเล็ก: 15m > 5m > 1m)
+  const fiftyPctConfirmed = fiftyPctChecks[0];
+
   // 5.4 คำนวณ Entry / SL / TP
   const entry = currentPrice;
   const bufferPct = 0.0015; // กันชนเผื่อ noise ~0.15%
@@ -240,6 +309,18 @@ async function analyzeGoldSignal() {
     keyLevel: +keyLevel.price.toFixed(2),
     keyLevelStrength: keyLevel.strength,
     confirmations: confirmations.map(c => `${c.tf}: ${c.pattern.type}`),
+    fiftyPercentConfirmation: {
+      tf: fiftyPctConfirmed.tf,
+      level: fiftyPctConfirmed.result.level,
+      impulseCandle: {
+        time: fiftyPctConfirmed.result.impulseCandle.time,
+        open: fiftyPctConfirmed.result.impulseCandle.open,
+        close: fiftyPctConfirmed.result.impulseCandle.close,
+      },
+    },
+    // เก็บแท่งเทียนล่าสุดของ TF ที่ยืนยันได้ ไว้ใช้สร้างกราฟประกอบข้อความแจ้งเตือน
+    chartTf: fiftyPctConfirmed.tf,
+    chartCandles: candleSets[fiftyPctConfirmed.tf].slice(-30),
   };
 }
 
@@ -250,6 +331,8 @@ function formatSignalMessage(signal) {
   if (!signal.hasSignal) return null; // ไม่มีสัญญาณ ไม่ต้องส่งอะไร
 
   const dirText = signal.direction === 'long' ? '🟢 เข้า BUY (Long)' : '🔴 เข้า SELL (Short)';
+  const fp = signal.fiftyPercentConfirmation;
+  const fpSide = signal.direction === 'long' ? 'B (ปิดเหนือ 50% ของแท่งเขียวหลัก)' : 'S (ปิดใต้ 50% ของแท่งแดงหลัก)';
 
   return [
     `📊 สัญญาณเทรดทองคำ (XAU/USD)`,
@@ -262,11 +345,77 @@ function formatSignalMessage(signal) {
     ``,
     `เหตุผล:`,
     `- แนวสำคัญ (4H/1H): ${signal.keyLevel} (โดนเทสต์ ${signal.keyLevelStrength} ครั้ง)`,
-    `- ยืนยันจาก: ${signal.confirmations.join(', ')}`,
+    `- ยืนยันรูปแบบแท่งเทียนจาก: ${signal.confirmations.join(', ')}`,
+    `- ยืนยัน 50% Retracement ฝั่ง ${fpSide} ที่ TF ${fp.tf}`,
+    `  ระดับ 50%: ${fp.level} | แท่งหลักอ้างอิง (${new Date(fp.impulseCandle.time * 1000).toLocaleString('th-TH')}): open ${fp.impulseCandle.open} → close ${fp.impulseCandle.close}`,
     ``,
     `⚠️ นี่คือสัญญาณจากการวิเคราะห์ทางเทคนิคอัตโนมัติเท่านั้น`,
     `ไม่ใช่คำแนะนำการลงทุน โปรดบริหารความเสี่ยงและตัดสินใจด้วยตัวเองทุกครั้ง`,
   ].join('\n');
 }
 
-module.exports = { analyzeGoldSignal, formatSignalMessage };
+// ---------------------------------------------------------------
+// 7) สร้าง URL รูปกราฟแท่งเทียนประกอบสัญญาณ (ผ่าน QuickChart.io ไม่ต้องมี server เก็บรูปเอง)
+//    คืนค่า null ถ้าสร้างไม่สำเร็จ (เช่น เน็ตล่ม) เพื่อให้ระบบยังส่งข้อความตัวหนังสือได้ตามปกติ
+// ---------------------------------------------------------------
+async function generateChartImageUrl(signal) {
+  if (!signal.hasSignal || !signal.chartCandles) return null;
+
+  try {
+    const candles = signal.chartCandles;
+    const dirColor = signal.direction === 'long' ? '#26a69a' : '#ef5350';
+
+    const chartConfig = {
+      type: 'candlestick',
+      data: {
+        datasets: [{
+          label: `XAU/USD ${signal.chartTf}`,
+          data: candles.map(c => ({
+            x: new Date(c.time * 1000).toISOString(),
+            o: c.open, h: c.high, l: c.low, c: c.close,
+          })),
+        }],
+      },
+      options: {
+        plugins: {
+          title: {
+            display: true,
+            text: `XAU/USD ${signal.chartTf} — Entry ${signal.entry} (${signal.direction.toUpperCase()})`,
+          },
+          annotation: {
+            annotations: {
+              keyLevel: {
+                type: 'line', yMin: signal.keyLevel, yMax: signal.keyLevel,
+                borderColor: '#ffb300', borderWidth: 1.5,
+                label: { display: true, content: `แนว ${signal.keyLevel}`, position: 'start' },
+              },
+              fiftyPct: {
+                type: 'line',
+                yMin: signal.fiftyPercentConfirmation.level,
+                yMax: signal.fiftyPercentConfirmation.level,
+                borderColor: dirColor, borderWidth: 1.5, borderDash: [6, 4],
+                label: { display: true, content: `50% = ${signal.fiftyPercentConfirmation.level}`, position: 'end' },
+              },
+            },
+          },
+        },
+        scales: { x: { type: 'time' } },
+      },
+    };
+
+    const res = await fetch('https://quickchart.io/chart/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chart: chartConfig, width: 700, height: 450, backgroundColor: '#111' }),
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data && data.success ? data.url : null;
+  } catch (err) {
+    console.error('สร้างรูปกราฟไม่สำเร็จ (ข้ามไป ส่งแค่ข้อความตัวหนังสือ):', err.message);
+    return null;
+  }
+}
+
+module.exports = { analyzeGoldSignal, formatSignalMessage, generateChartImageUrl };
