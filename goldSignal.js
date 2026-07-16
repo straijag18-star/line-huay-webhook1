@@ -11,32 +11,62 @@
 //
 // ==================================================================
 
-const API_NINJAS_KEY = process.env.API_NINJAS_KEY || '';
-const API_NINJAS_URL = 'https://api.api-ninjas.com/v1/goldpricehistorical';
+const TWELVE_DATA_API_KEY = process.env.TWELVE_DATA_API_KEY || '';
+const TWELVE_DATA_URL = 'https://api.twelvedata.com/time_series';
+const SYMBOL = 'XAU/USD';
 
 // timeframe ที่ใช้วิเคราะห์ เรียงจากใหญ่ไปเล็ก
 const TIMEFRAMES = ['4h', '1h', '15m', '5m', '1m'];
 
+// map ชื่อ interval ของเราให้ตรงกับที่ Twelve Data ใช้
+const TWELVE_DATA_INTERVAL = {
+  '1m': '1min',
+  '5m': '5min',
+  '15m': '15min',
+  '1h': '1h',
+  '4h': '4h',
+};
+
+function getTwelveDataKey() {
+  if (!TWELVE_DATA_API_KEY) {
+    throw new Error('ไม่พบ TWELVE_DATA_API_KEY กรุณาตั้งค่า environment variable ก่อนใช้งาน');
+  }
+  return TWELVE_DATA_API_KEY;
+}
+
 // ---------------------------------------------------------------
-// 1) ดึงข้อมูลแท่งเทียน (OHLC) จาก API Ninjas ทีละ timeframe
+// 1) ดึงข้อมูลแท่งเทียน (OHLC) จาก Twelve Data ทีละ timeframe
 // ---------------------------------------------------------------
 async function fetchCandles(period, limit = 100) {
-  const now = Math.floor(Date.now() / 1000);
-  // ประมาณช่วงเวลาย้อนหลังให้พอสำหรับแต่ละ TF (ให้ได้อย่างน้อย `limit` แท่ง)
-  const secondsPerBar = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400 }[period];
-  const start = now - secondsPerBar * (limit + 5);
+  const interval = TWELVE_DATA_INTERVAL[period];
+  const url = `${TWELVE_DATA_URL}?symbol=${encodeURIComponent(SYMBOL)}&interval=${interval}&outputsize=${limit}&apikey=${getTwelveDataKey()}`;
 
-  const url = `${API_NINJAS_URL}?period=${period}&start=${start}&end=${now}`;
-  const res = await fetch(url, { headers: { 'X-Api-Key': API_NINJAS_KEY } });
+  const res = await fetch(url);
   if (!res.ok) {
     const bodyText = await res.text().catch(() => '(อ่าน response ไม่ได้)');
-    throw new Error(`API Ninjas error (${period}): ${res.status} - ${bodyText}`);
+    throw new Error(`Twelve Data error (${period}): ${res.status} - ${bodyText}`);
   }
+
   const data = await res.json();
 
-  // เรียงจากเก่า -> ใหม่ เพื่อให้ index ท้ายสุดคือแท่งล่าสุด
-  return data
-    .map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close }))
+  // Twelve Data ใช้ status "error" ในตัว body แม้ HTTP status จะเป็น 200 ก็ได้
+  if (data.status === 'error') {
+    throw new Error(`Twelve Data error (${period}): ${data.code || ''} - ${data.message || JSON.stringify(data)}`);
+  }
+  if (!Array.isArray(data.values)) {
+    throw new Error(`Twelve Data error (${period}): ไม่พบข้อมูล values ใน response - ${JSON.stringify(data)}`);
+  }
+
+  // Twelve Data ส่งข้อมูลมาเรียงจาก "ใหม่ -> เก่า" และค่าเป็น string ต้องแปลงเป็น number
+  // เรียงใหม่เป็นเก่า -> ใหม่ เพื่อให้ index ท้ายสุดคือแท่งล่าสุด (เหมือนของเดิม)
+  return data.values
+    .map(c => ({
+      time: Math.floor(new Date(c.datetime).getTime() / 1000),
+      open: parseFloat(c.open),
+      high: parseFloat(c.high),
+      low: parseFloat(c.low),
+      close: parseFloat(c.close),
+    }))
     .sort((a, b) => a.time - b.time);
 }
 
