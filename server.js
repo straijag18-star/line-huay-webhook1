@@ -165,6 +165,21 @@ app.post('/webhook', async (req, res) => {
     addSubscriber(db, userId);
 
     const text = event.message.text;
+
+    // ---------- ถ้าพิมพ์คำเช็คราคาเข้ามา ให้เช็คราคาแล้วตอบ+แจ้งเตือนทันที ไม่ต้องรอรอบ 5 นาที ----------
+    if (isPriceCheckMessage(text)) {
+      saveDb(db);
+      try {
+        const signal = await analyzeGoldSignal();
+        const message = formatStatusMessage(signal);
+        if (event.replyToken) await replyMessage(event.replyToken, message);
+        await pushMessage(message); // แจ้งเตือนไปหาผู้ติดตามคนอื่นๆ ด้วยตามที่ต้องการ
+      } catch (err) {
+        console.error('เกิดข้อผิดพลาดตอนเช็คราคาจากคำสั่ง LINE:', err);
+      }
+      continue;
+    }
+
     const groups = parseMessageText(text);
 
     if (groups.length === 0) {
@@ -272,28 +287,28 @@ async function pushMessage(text) {
   }
 }
 
-// ---------- ฟังก์ชันเช็คสัญญาณแล้วส่งแจ้งเตือน (ถ้ามีสัญญาณ) ----------
-let lastSignalKey = null; // กันส่งสัญญาณซ้ำๆ ทุกรอบถ้าเงื่อนไขยังไม่เปลี่ยน
+// ---------- สร้างข้อความสถานะราคา (ใช้ได้ทั้งตอนมีสัญญาณและยังไม่มีสัญญาณ) ----------
+// ทำแบบนี้เพื่อกันพังถ้า goldSignal.js ไม่ได้ใส่ field มาครบทุกตัว
+function formatStatusMessage(signal) {
+  if (signal.hasSignal) {
+    return formatSignalMessage(signal);
+  }
+  // ยังไม่มีสัญญาณ แต่ผู้ใช้ต้องการเห็นสถานะราคาปัจจุบันด้วย
+  const parts = ['📊 อัปเดตราคาทองคำ'];
+  if (signal.price !== undefined) parts.push(`ราคาปัจจุบัน: ${signal.price}`);
+  if (signal.keyLevel !== undefined) parts.push(`แนวใกล้เคียง: ${signal.keyLevel}`);
+  if (signal.bias !== undefined) parts.push(`Bias: ${signal.bias}`);
+  parts.push(signal.reason ? `สถานะ: ${signal.reason}` : 'สถานะ: ยังไม่มีสัญญาณเข้าเทรด');
+  return parts.join('\n');
+}
 
+// ---------- ฟังก์ชันเช็คสัญญาณแล้วส่งแจ้งเตือน (ส่งทุกครั้งที่เรียก ไม่ว่าจะมีสัญญาณหรือไม่) ----------
 async function checkAndNotify() {
   try {
     const signal = await analyzeGoldSignal();
-    if (!signal.hasSignal) {
-      console.log('ยังไม่มีสัญญาณ:', signal.reason);
-      return;
-    }
-
-    // สร้าง key จากรายละเอียดสัญญาณ กันไม่ให้ส่งข้อความเดิมซ้ำทุก 5-15 นาที
-    const signalKey = `${signal.direction}-${signal.entry}-${signal.keyLevel}`;
-    if (signalKey === lastSignalKey) {
-      console.log('สัญญาณเดิม ไม่ส่งซ้ำ');
-      return;
-    }
-    lastSignalKey = signalKey;
-
-    const message = formatSignalMessage(signal);
+    const message = formatStatusMessage(signal);
     await pushMessage(message);
-    console.log('ส่งสัญญาณเทรดแล้ว:', signalKey);
+    console.log(signal.hasSignal ? 'ส่งสัญญาณเทรดแล้ว' : 'ส่งอัปเดตสถานะราคาแล้ว (ยังไม่มีสัญญาณ):', signal.reason);
   } catch (err) {
     console.error('เกิดข้อผิดพลาดตอนวิเคราะห์สัญญาณ:', err);
   }
@@ -305,3 +320,14 @@ setInterval(checkAndNotify, CHECK_INTERVAL_MS);
 
 // เช็คครั้งแรกทันทีตอน server เริ่มทำงาน (ไม่ต้องรอ 5 นาทีแรก)
 checkAndNotify();
+
+// ---------- คำสั่งจาก LINE: ให้ผู้ใช้พิมพ์ทักมาเพื่อเช็คราคาได้ทันที (ไม่ต้องรอรอบ 5 นาที) ----------
+const PRICE_CHECK_KEYWORDS = ['ราคา', 'เช็คราคา', 'เชคราคา', 'check price', 'gold', 'ทอง'];
+function isPriceCheckMessage(text) {
+  const t = (text || '').toLowerCase();
+  return PRICE_CHECK_KEYWORDS.some(k => t.includes(k.toLowerCase()));
+}
+
+module.exports.isPriceCheckMessage = isPriceCheckMessage;
+module.exports.checkAndNotify = checkAndNotify;
+module.exports.formatStatusMessage = formatStatusMessage;
